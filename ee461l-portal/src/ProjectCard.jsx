@@ -1,106 +1,64 @@
 import React, { useState } from "react";
-import {
-  Card,
-  CardActions,
-  Typography,
-  Button,
-  TextField,
-  Box,
-} from "@mui/material";
 
-export default function ProjectCard({ name, members, canJoin, onJoin, onLeave }) {
+/**
+ * Lightweight project summary card.
+ * Used only for display inside the Projects list — no join/leave buttons.
+ */
+export default function ProjectCard({ name, members }) {
   const [hwSet1, setHwSet1] = useState(50);
   const [hwSet2, setHwSet2] = useState(0);
   const [qty, setQty] = useState("");
 
-  const handleCheckIn = async () => {
+  const handleCheckIn = () => {
     const val = parseInt(qty) || 0;
-    if (val > 0) {
-      try {
-        const res = await fetch(`/checkin/${name}/${val}`);
-        const data = await res.json();
-        alert(data.message);
-        setHwSet1(prev => Math.min(prev + val, 100));
-      } catch {
-        alert("Check-in failed.");
-      }
-      setQty("");
-    }
+    if (val <= 0) return;
+    alert(`Checked in ${val} units (demo only).`);
+    setHwSet1((prev) => Math.min(prev + val, 100));
+    setQty("");
   };
 
-  const handleCheckOut = async () => {
+  const handleCheckOut = () => {
     const val = parseInt(qty) || 0;
-    if (val > 0) {
-      try {
-        const res = await fetch(`/checkout/${name}/${val}`);
-        const data = await res.json();
-        alert(data.message);
-        setHwSet1(prev => Math.max(prev - val, 0));
-      } catch {
-        alert("Check-out failed.");
-      }
-      setQty("");
-    }
+    if (val <= 0) return;
+    alert(`Checked out ${val} units (demo only).`);
+    setHwSet1((prev) => Math.max(prev - val, 0));
+    setQty("");
   };
 
   return (
-    <Card
-      variant="outlined"
-      sx={{
-        backgroundColor: canJoin ? "#f9f9f9" : "#e8f5e9",
-        display: "flex",
-        justifyContent: "space-between",
-        alignItems: "center",
-        padding: "12px 20px",
-        flexWrap: "wrap",
-      }}
-    >
-      <Box sx={{ flex: 1, minWidth: 240 }}>
-        <Typography variant="h6">{name}</Typography>
-        <Typography variant="body2" color="text.secondary">
-          Members: {members}
-        </Typography>
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          HWSet1: {hwSet1}/100
-        </Typography>
-        <Typography variant="body2">HWSet2: {hwSet2}/100</Typography>
-      </Box>
+    <div className="border border-gray-200 bg-white rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between shadow-sm">
+      {/* Project info */}
+      <div>
+        <h4 className="text-base font-semibold text-gray-900">{name}</h4>
+        <p className="text-sm text-gray-600">Members: {members}</p>
+        <p className="text-sm text-gray-500 mt-1">
+          HWSet1: {hwSet1}/100 | HWSet2: {hwSet2}/100
+        </p>
+      </div>
 
-      <Box
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-          flexWrap: "wrap",
-          justifyContent: "center",
-        }}
-      >
-        <TextField
-          label="Enter qty"
-          size="small"
-          sx={{ width: 100 }}
+      {/* Demo-only hardware check-in/out */}
+      <div className="flex items-center gap-2 mt-3 sm:mt-0">
+        <input
+          type="number"
+          min="0"
+          className="border border-gray-300 rounded-lg px-2 py-1 w-20 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="qty"
           value={qty}
-          onChange={e => setQty(e.target.value)}
+          onChange={(e) => setQty(e.target.value)}
         />
-        <Button variant="outlined" size="small" onClick={handleCheckIn}>
+        <button
+          onClick={handleCheckIn}
+          className="px-3 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-sm font-medium"
+        >
           Check In
-        </Button>
-        <Button variant="outlined" size="small" onClick={handleCheckOut}>
+        </button>
+        <button
+          onClick={handleCheckOut}
+          className="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium"
+        >
           Check Out
-        </Button>
-      </Box>
-
-      <CardActions>
-        {canJoin ? (
-          <Button variant="contained" onClick={onJoin}>
-            Join
-          </Button>
-        ) : (
-          <Button variant="outlined" color="warning" onClick={onLeave}>
-            Leave
-          </Button>
-        )}
-      </CardActions>
-    </Card>
+        </button>
+      </div>
+    </div>
   );
 }

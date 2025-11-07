@@ -1,72 +1,47 @@
-import React, { useState } from "react";
-import { Container, Typography, Box, Snackbar, Alert } from "@mui/material";
-import ProjectCard from "./ProjectCard";
+import React from "react";
 
-export default function Projects() {
-  const [projects, setProjects] = useState([
-    { id: 1, name: "Arduino App", members: 2, canJoin: true },
-    { id: 2, name: "Weather Engine", members: 4, canJoin: false },
-    { id: 3, name: "Card Game", members: 1, canJoin: true },
-  ]);
-
-  const [banner, setBanner] = useState({
-    open: false,
-    message: "",
-    severity: "success",
-  });
-
-  async function handleJoin(id) {
-    try {
-      const res = await fetch(`/join/${id}`);
-      const data = await res.json();
-      setProjects(prev =>
-        prev.map(p =>
-          p.id === id ? { ...p, canJoin: false, members: p.members + 1 } : p
-        )
-      );
-      setBanner({ open: true, message: data.message, severity: "success" });
-    } catch {
-      setBanner({ open: true, message: "Failed to join project.", severity: "error" });
-    }
-  }
-
-  async function handleLeave(id) {
-    try {
-      const res = await fetch(`/leave/${id}`);
-      const data = await res.json();
-      setProjects(prev =>
-        prev.map(p =>
-          p.id === id ? { ...p, canJoin: true, members: p.members - 1 } : p
-        )
-      );
-      setBanner({ open: true, message: data.message, severity: "info" });
-    } catch {
-      setBanner({ open: true, message: "Failed to leave project.", severity: "error" });
-    }
-  }
-
+/**
+ * Clean, line-by-line formatted project display.
+ * Matches the rest of your dashboard card aesthetic.
+ */
+export default function Projects({ projects }) {
   return (
-    <Container>
-      <Typography variant="h5" gutterBottom>Projects</Typography>
-      {projects.map(proj => (
-        <Box key={proj.id} sx={{ mb: 2 }}>
-          <ProjectCard
-            name={proj.name}
-            members={proj.members}
-            canJoin={proj.canJoin}
-            onJoin={() => handleJoin(proj.id)}
-            onLeave={() => handleLeave(proj.id)}
-          />
-        </Box>
-      ))}
+    <div className="space-y-6">
+      <h3 className="text-lg font-semibold text-gray-900 mb-2">Projects</h3>
 
-      <Snackbar
-        open={banner.open}
-        autoHideDuration={2500}
-        onClose={() => setBanner({ ...banner, open: false })}
-      >
-        <Alert severity={banner.severity}>{banner.message}</Alert>
-      </Snackbar>
-    </Container>
+      {projects.length === 0 ? (
+        <p className="text-sm text-gray-600">
+          You’re not a member of any projects yet. Create one or join by ID.
+        </p>
+      ) : (
+        projects.map((proj) => (
+          <div
+            key={proj.id}
+            className="rounded-2xl border border-gray-100 bg-white/90 backdrop-blur-sm shadow-sm p-6 hover:shadow-md transition-all duration-200"
+          >
+            <h4 className="text-xl font-bold text-gray-900 mb-4">
+              {proj.name || "Project Name"}
+            </h4>
+
+            <div className="space-y-1 text-sm text-gray-700">
+              <p>
+                <span className="font-medium text-gray-600">ID:</span>{" "}
+                {proj.id || "—"}
+              </p>
+              <p>
+                <span className="font-medium text-gray-600">Members:</span>{" "}
+                {proj.members?.length || 0}
+              </p>
+              <p>
+                <span className="font-medium text-gray-600">
+                  Project Description:
+                </span>{" "}
+                {proj.description || "No description provided."}
+              </p>
+            </div>
+          </div>
+        ))
+      )}
+    </div>
   );
 }
