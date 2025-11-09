@@ -31,17 +31,6 @@ app.use(
   })
 );
 
-// --- MongoDB Connection ---
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/ee461l_portal";
-mongoose
-  .connect(MONGODB_URI)
-  .then(() => {
-    console.log("MongoDB connected");
-  })
-  .catch((err) => {
-    console.error("MongoDB connection error:", err.message);
-  });
-
 // --- Models ---
 const userSchema = new mongoose.Schema(
   {
@@ -53,7 +42,53 @@ const userSchema = new mongoose.Schema(
 
 const User = mongoose.model("User", userSchema);
 
-// (removed in-memory USERS; now using MongoDB)
+// --- Hardware Model ---
+const hardwareSetSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, unique: true, trim: true }, // "HWSET1" or "HWSET2"
+    capacity: { type: Number, required: true, min: 0 },
+    checkedOut: { type: Number, required: true, default: 0, min: 0 },
+  },
+  { timestamps: true }
+);
+
+const HardwareSet = mongoose.model("HardwareSet", hardwareSetSchema);
+
+// Initialize hardware sets if they don't exist
+async function initializeHardware() {
+  try {
+    const hwSets = await HardwareSet.find();
+    if (hwSets.length === 0) {
+      await HardwareSet.create([
+        { name: "HWSET1", capacity: 250, checkedOut: 20 },
+        { name: "HWSET2", capacity: 300, checkedOut: 70 },
+      ]);
+      console.log("Hardware sets initialized: HWSET1 (capacity: 250), HWSET2 (capacity: 300)");
+    } else {
+      console.log(`Found ${hwSets.length} hardware set(s) in database`);
+      hwSets.forEach((set) => {
+        console.log(`  - ${set.name}: ${set.capacity - set.checkedOut}/${set.capacity} available`);
+      });
+    }
+  } catch (err) {
+    console.error("Error initializing hardware:", err.message);
+  }
+}
+
+// --- MongoDB Connection ---
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/ee461l_portal";
+mongoose
+  .connect(MONGODB_URI)
+  .then(async () => {
+    console.log(`MongoDB connected to: ${MONGODB_URI.replace(/\/\/.*@/, "//***@")}`);
+    console.log(`Database: ${mongoose.connection.db.databaseName}`);
+    // Initialize hardware after successful connection
+    await initializeHardware();
+  })
+  .catch((err) => {
+    console.error("MongoDB connection error:", err.message);
+    console.error("Make sure MongoDB is running on localhost:27017");
+  });
 
 // auth guard (optional example)
 function requireAuth(req, _res, next) {
@@ -72,6 +107,11 @@ app.get("/api/me", (req, res) => {
 
 app.post("/api/signup", async (req, res) => {
   try {
+    // Check MongoDB connection
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database not connected. Please check MongoDB is running." });
+    }
+
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
 
@@ -81,16 +121,25 @@ app.post("/api/signup", async (req, res) => {
     const passwordHash = await bcrypt.hash(String(password), 10);
     const doc = await User.create({ username: username.trim(), passwordHash });
 
+    console.log(`User created: ${doc.username} (ID: ${doc._id})`);
     req.session.user = { id: doc._id.toString(), username: doc.username };
     return res.json({ user: req.session.user });
   } catch (err) {
     console.error("/api/signup error:", err.message);
-    return res.status(500).json({ error: "Signup failed" });
+    if (err.name === "MongoServerError" && err.code === 11000) {
+      return res.status(409).json({ error: "Username already exists" });
+    }
+    return res.status(500).json({ error: err.message || "Signup failed" });
   }
 });
 
 app.post("/api/login", async (req, res) => {
   try {
+    // Check MongoDB connection
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database not connected. Please check MongoDB is running." });
+    }
+
     const { username, password } = req.body || {};
     if (!username || !password) return res.status(400).json({ error: "Username and password required" });
 
@@ -104,7 +153,7 @@ app.post("/api/login", async (req, res) => {
     return res.json({ user: req.session.user });
   } catch (err) {
     console.error("/api/login error:", err.message);
-    return res.status(500).json({ error: "Login failed" });
+    return res.status(500).json({ error: err.message || "Login failed" });
   }
 });
 
@@ -113,6 +162,118 @@ app.post("/api/logout", requireAuth, (req, res) => {
     res.clearCookie("ee461l.sid");
     res.json({ ok: true });
   });
+});
+
+// --- Hardware Routes ---
+app.get("/api/hardware", async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database not connected. Please check MongoDB is running." });
+    }
+
+    const hardwareSets = await HardwareSet.find().sort({ name: 1 });
+    const hardware = {};
+    hardwareSets.forEach((set) => {
+      hardware[set.name] = {
+        capacity: set.capacity,
+        checkedOut: set.checkedOut,
+      };
+    });
+
+    res.json({ hardware });
+  } catch (err) {
+    console.error("/api/hardware error:", err.message);
+    res.status(500).json({ error: err.message || "Failed to fetch hardware" });
+  }
+});
+
+app.post("/api/hardware/:name/checkout", requireAuth, async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database not connected. Please check MongoDB is running." });
+    }
+
+    const { name } = req.params;
+    const { quantity } = req.body || {};
+
+    if (!quantity || quantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be a positive number" });
+    }
+
+    const hwSet = await HardwareSet.findOne({ name: name.toUpperCase() });
+    if (!hwSet) {
+      return res.status(404).json({ error: `Hardware set ${name} not found` });
+    }
+
+    const available = hwSet.capacity - hwSet.checkedOut;
+    const qty = parseInt(quantity, 10);
+
+    if (qty > available) {
+      return res.status(400).json({
+        error: `Insufficient hardware. Available: ${available}, Requested: ${qty}`,
+        available,
+      });
+    }
+
+    hwSet.checkedOut += qty;
+    await hwSet.save();
+
+    console.log(`User ${req.session.user.username} checked out ${qty} units of ${hwSet.name}`);
+    res.json({
+      hardware: {
+        name: hwSet.name,
+        capacity: hwSet.capacity,
+        checkedOut: hwSet.checkedOut,
+      },
+    });
+  } catch (err) {
+    console.error("/api/hardware/:name/checkout error:", err.message);
+    res.status(500).json({ error: err.message || "Checkout failed" });
+  }
+});
+
+app.post("/api/hardware/:name/checkin", requireAuth, async (req, res) => {
+  try {
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({ error: "Database not connected. Please check MongoDB is running." });
+    }
+
+    const { name } = req.params;
+    const { quantity } = req.body || {};
+
+    if (!quantity || quantity <= 0) {
+      return res.status(400).json({ error: "Quantity must be a positive number" });
+    }
+
+    const hwSet = await HardwareSet.findOne({ name: name.toUpperCase() });
+    if (!hwSet) {
+      return res.status(404).json({ error: `Hardware set ${name} not found` });
+    }
+
+    const qty = parseInt(quantity, 10);
+
+    if (qty > hwSet.checkedOut) {
+      return res.status(400).json({
+        error: `Cannot check in more than checked out. Currently checked out: ${hwSet.checkedOut}, Requested: ${qty}`,
+        checkedOut: hwSet.checkedOut,
+      });
+    }
+
+    hwSet.checkedOut -= qty;
+    await hwSet.save();
+
+    console.log(`User ${req.session.user.username} checked in ${qty} units of ${hwSet.name}`);
+    res.json({
+      hardware: {
+        name: hwSet.name,
+        capacity: hwSet.capacity,
+        checkedOut: hwSet.checkedOut,
+      },
+    });
+  } catch (err) {
+    console.error("/api/hardware/:name/checkin error:", err.message);
+    res.status(500).json({ error: err.message || "Checkin failed" });
+  }
 });
 
 // example protected route

@@ -48,6 +48,52 @@ async function apiSignup(username, password) {
   return user; // { id, username }
 }
 
+// --- Hardware API helpers ---
+async function apiGetHardware() {
+  const res = await fetch(`${API_BASE}/api/hardware`, { credentials: "include" });
+  if (!res.ok) throw new Error("Failed to fetch hardware");
+  const { hardware } = await res.json();
+  return hardware; // { HWSET1: { capacity, checkedOut }, HWSET2: { capacity, checkedOut } }
+}
+
+async function apiCheckoutHardware(name, quantity) {
+  const res = await fetch(`${API_BASE}/api/hardware/${name}/checkout`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quantity }),
+  });
+  if (!res.ok) {
+    let msg = "Checkout failed";
+    try {
+      const j = await res.json();
+      if (j?.error) msg = j.error;
+    } catch {}
+    throw new Error(msg);
+  }
+  const { hardware } = await res.json();
+  return hardware;
+}
+
+async function apiCheckinHardware(name, quantity) {
+  const res = await fetch(`${API_BASE}/api/hardware/${name}/checkin`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ quantity }),
+  });
+  if (!res.ok) {
+    let msg = "Checkin failed";
+    try {
+      const j = await res.json();
+      if (j?.error) msg = j.error;
+    } catch {}
+    throw new Error(msg);
+  }
+  const { hardware } = await res.json();
+  return hardware;
+}
+
 /* ---------- storage helpers ---------- */
 const LS_KEYS = {
   USERS: "ee461_users",
@@ -61,10 +107,7 @@ const DEFAULT_PROJECTS = [
   { id: "JK3002", name: "Example Project", description: "This is an example Project.", members: [] },
 ];
 
-const DEFAULT_HW = {
-  HWSET1: { capacity: 250, checkedOut: 20 },
-  HWSET2: { capacity: 300, checkedOut: 70 },
-};
+// DEFAULT_HW removed - now loaded from MongoDB API
 
 function loadJSON(key, fallback) {
   try {
@@ -139,12 +182,12 @@ function LoginView({ onLogin, onSignup }) {
 
           <Button
             className="w-full"
-            onClick={() => {
+            onClick={async () => {
               if (!username || !password) {
                 alert("Enter username and password");
                 return;
               }
-              onLogin({ username, password });
+              await onLogin({ username, password });
             }}
           >
             Sign In
@@ -154,12 +197,12 @@ function LoginView({ onLogin, onSignup }) {
             <span>Don’t have an account? </span>
             <button
               className="underline underline-offset-2 hover:text-gray-800"
-              onClick={() => {
+              onClick={async () => {
                 if (!username || !password) {
                   alert("Enter username and password");
                   return;
                 }
-                onSignup(username, password);
+                await onSignup(username, password);
               }}
             >
               Sign up
@@ -316,6 +359,9 @@ function DashboardView({ user, projects, onOpenProject, onCreateProject, onJoinB
 }
 
 function HWQuickStatus({ hw }) {
+  if (!hw || Object.keys(hw).length === 0) {
+    return <div className="text-sm text-gray-500">Loading hardware status...</div>;
+  }
   return (
     <div className="grid grid-cols-2 gap-4">
       {Object.entries(hw).map(([k, v]) => {
@@ -338,36 +384,67 @@ function HWQuickStatus({ hw }) {
 }
 
 function ProjectView({ project, onBack, onLogout, user, onHWChange }) {
-  // hydrate from localStorage each mount so it's always global/shared
-  const [hwState, setHwState] = useState(() => loadJSON(LS_KEYS.HW, DEFAULT_HW));
+  const [hwState, setHwState] = useState(null);
   const [qty, setQty] = useState({ HWSET1: 0, HWSET2: 0 });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
 
-  const availability = useMemo(
-    () => ({
-      HWSET1: hwState.HWSET1.capacity - hwState.HWSET1.checkedOut,
-      HWSET2: hwState.HWSET2.capacity - hwState.HWSET2.checkedOut,
-    }),
-    [hwState]
-  );
+  // Load hardware from API on mount and refresh
+  const loadHardware = async () => {
+    try {
+      const hardware = await apiGetHardware();
+      setHwState(hardware);
+      setError(null);
+      // Notify parent to refresh hardware state
+      if (onHWChange) onHWChange();
+    } catch (err) {
+      console.error("Failed to load hardware:", err);
+      setError(err.message);
+    }
+  };
 
-  function adjust(type) {
-    setHwState((prev) => {
-      const next = { ...prev };
+  useEffect(() => {
+    loadHardware();
+  }, []);
+
+  const availability = useMemo(() => {
+    if (!hwState) return { HWSET1: 0, HWSET2: 0 };
+    return {
+      HWSET1: hwState.HWSET1?.capacity - hwState.HWSET1?.checkedOut || 0,
+      HWSET2: hwState.HWSET2?.capacity - hwState.HWSET2?.checkedOut || 0,
+    };
+  }, [hwState]);
+
+  async function adjust(type) {
+    if (!hwState) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const updates = {};
       for (const k of ["HWSET1", "HWSET2"]) {
         const change = qty[k] || 0;
+        if (change <= 0) continue;
+
+        let updated;
         if (type === "checkout") {
-          const can = Math.max(0, Math.min(change, prev[k].capacity - prev[k].checkedOut));
-          next[k] = { ...prev[k], checkedOut: prev[k].checkedOut + can };
+          updated = await apiCheckoutHardware(k, change);
         } else {
-          const can = Math.max(0, Math.min(change, prev[k].checkedOut));
-          next[k] = { ...prev[k], checkedOut: prev[k].checkedOut - can };
+          updated = await apiCheckinHardware(k, change);
         }
+        updates[k] = { capacity: updated.capacity, checkedOut: updated.checkedOut };
       }
-      saveJSON(LS_KEYS.HW, next);
-      onHWChange(next); // bubble up to refresh dashboard status
-      return next;
-    });
-    setQty({ HWSET1: 0, HWSET2: 0 });
+
+      // Refresh hardware state from API to ensure consistency
+      await loadHardware();
+    } catch (err) {
+      setError(err.message);
+      alert(err.message || `${type === "checkout" ? "Checkout" : "Checkin"} failed`);
+    } finally {
+      setLoading(false);
+      setQty({ HWSET1: 0, HWSET2: 0 });
+    }
   }
 
   return (
@@ -406,57 +483,72 @@ function ProjectView({ project, onBack, onLogout, user, onHWChange }) {
 
         <Card className="p-6 md:col-span-2">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Hardware Summary</h2>
-          <div className="space-y-4">
-            {Object.keys(hwState).map((k) => {
-              const s = hwState[k];
-              const available = s.capacity - s.checkedOut;
-              const pct = Math.round((available / s.capacity) * 100);
-              return (
-                <div key={k} className="p-4 rounded-xl border border-gray-200 bg-white">
-                  <div className="flex items-baseline justify-between">
-                    <div>
-                      <div className="text-sm text-gray-500">{k}</div>
-                      <div className="text-2xl font-bold text-gray-900">
-                        {available} / {s.capacity}
+          {error && <div className="mb-4 text-sm text-red-600">{error}</div>}
+          {!hwState ? (
+            <div className="text-sm text-gray-500">Loading hardware status...</div>
+          ) : (
+            <div className="space-y-4">
+              {Object.keys(hwState).map((k) => {
+                const s = hwState[k];
+                const available = s.capacity - s.checkedOut;
+                const pct = Math.round((available / s.capacity) * 100);
+                return (
+                  <div key={k} className="p-4 rounded-xl border border-gray-200 bg-white">
+                    <div className="flex items-baseline justify-between">
+                      <div>
+                        <div className="text-sm text-gray-500">{k}</div>
+                        <div className="text-2xl font-bold text-gray-900">
+                          {available} / {s.capacity}
+                        </div>
                       </div>
+                      <div className="text-sm text-gray-600">{pct}% available</div>
                     </div>
-                    <div className="text-sm text-gray-600">{pct}% available</div>
+                    <div className="w-full h-2 bg-gray-100 rounded-full mt-3">
+                      <div className="h-2 bg-blue-600 rounded-full" style={{ width: `${pct}%` }} />
+                    </div>
                   </div>
-                  <div className="w-full h-2 bg-gray-100 rounded-full mt-3">
-                    <div className="h-2 bg-blue-600 rounded-full" style={{ width: `${pct}%` }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          )}
         </Card>
 
         <Card className="p-6 md:col-span-5">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Request or Check in Hardware</h2>
-          <div className="grid md:grid-cols-4 gap-4">
-            {Object.keys(hwState).map((k) => (
-              <div key={k} className="md:col-span-2">
-                <Label>
-                  Units for {k} (available {availability[k]})
-                </Label>
-                <Input
-                  inputMode="numeric"
-                  value={qty[k] || 0}
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value || "0", 10);
-                    const clean = isNaN(v) ? 0 : Math.max(0, v);
-                    setQty((prev) => ({ ...prev, [k]: clean }));
-                  }}
-                />
+          {error && <div className="mb-4 text-sm text-red-600">{error}</div>}
+          {!hwState ? (
+            <div className="text-sm text-gray-500">Loading hardware status...</div>
+          ) : (
+            <>
+              <div className="grid md:grid-cols-4 gap-4">
+                {Object.keys(hwState).map((k) => (
+                  <div key={k} className="md:col-span-2">
+                    <Label>
+                      Units for {k} (available {availability[k]})
+                    </Label>
+                    <Input
+                      inputMode="numeric"
+                      value={qty[k] || 0}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value || "0", 10);
+                        const clean = isNaN(v) ? 0 : Math.max(0, v);
+                        setQty((prev) => ({ ...prev, [k]: clean }));
+                      }}
+                      disabled={loading}
+                    />
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <Button onClick={() => adjust("checkout")}>Request Hardware</Button>
-            <Button variant="secondary" onClick={() => adjust("checkin")}>
-              Check in Hardware
-            </Button>
-          </div>
+              <div className="mt-4 flex flex-wrap gap-3">
+                <Button onClick={() => adjust("checkout")} disabled={loading}>
+                  {loading ? "Processing..." : "Request Hardware"}
+                </Button>
+                <Button variant="secondary" onClick={() => adjust("checkin")} disabled={loading}>
+                  {loading ? "Processing..." : "Check in Hardware"}
+                </Button>
+              </div>
+            </>
+          )}
         </Card>
       </main>
     </div>
@@ -465,51 +557,78 @@ function ProjectView({ project, onBack, onLogout, user, onHWChange }) {
 
 /* ---------- Root ---------- */
 export default function App() {
-  // seed storage on first load
+  // seed storage on first load (projects only - users and HW are in MongoDB)
   useEffect(() => {
     if (!localStorage.getItem(LS_KEYS.PROJECTS)) saveJSON(LS_KEYS.PROJECTS, DEFAULT_PROJECTS);
-    if (!localStorage.getItem(LS_KEYS.HW)) saveJSON(LS_KEYS.HW, DEFAULT_HW);
-    if (!localStorage.getItem(LS_KEYS.USERS)) saveJSON(LS_KEYS.USERS, []); // start empty
   }, []);
 
-  const [user, setUser] = useState(() => loadJSON(LS_KEYS.CURRENT_USER, null));
+  const [user, setUser] = useState(null);
   const [projects, setProjects] = useState(() => loadJSON(LS_KEYS.PROJECTS, DEFAULT_PROJECTS));
-  const [hw, setHW] = useState(() => loadJSON(LS_KEYS.HW, DEFAULT_HW));
+  const [hw, setHW] = useState(null);
   const [activeProjectId, setActiveProjectId] = useState(null);
 
-  // persist on change
+  // persist projects on change (but NOT user or HW - those come from MongoDB)
   useEffect(() => saveJSON(LS_KEYS.PROJECTS, projects), [projects]);
-  useEffect(() => saveJSON(LS_KEYS.HW, hw), [hw]);
-  useEffect(() => saveJSON(LS_KEYS.CURRENT_USER, user), [user]);
+
+  // Load hardware from API when user is logged in
+  useEffect(() => {
+    if (user) {
+      apiGetHardware()
+        .then((hardware) => {
+          setHW(hardware);
+        })
+        .catch((err) => {
+          console.error("Failed to load hardware:", err);
+        });
+    } else {
+      setHW(null);
+    }
+  }, [user]);
 
   const activeProject = useMemo(() => projects.find((p) => p.id === activeProjectId) || null, [projects, activeProjectId]);
 
   /* ----- auth handlers ----- */
-  const handleSignup = (username, password) => {
-    const users = loadJSON(LS_KEYS.USERS, []);
-    if (users.find((u) => u.username === username)) {
-      alert("Username already exists");
-      return;
+  // Check for existing session on mount
+  useEffect(() => {
+    apiMe()
+      .then((user) => {
+        if (user) {
+          setUser(user);
+        }
+      })
+      .catch(() => {
+        // No valid session
+      });
+  }, []);
+
+  const handleSignup = async (username, password) => {
+    try {
+      const user = await apiSignup(username, password);
+      setUser(user);
+    } catch (err) {
+      alert(err.message || "Signup failed");
     }
-    const nextUsers = [...users, { username, password }];
-    saveJSON(LS_KEYS.USERS, nextUsers);
-    setUser({ username });
-    // optional: auto-join no projects
   };
 
-  const handleLogin = ({ username, password }) => {
-    const users = loadJSON(LS_KEYS.USERS, []);
-    const match = users.find((u) => u.username === username && u.password === password);
-    if (!match) {
-      alert("Invalid username/password");
-      return;
+  const handleLogin = async ({ username, password }) => {
+    try {
+      const user = await apiLogin(username, password);
+      setUser(user);
+    } catch (err) {
+      alert(err.message || "Login failed");
     }
-    setUser({ username });
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await apiLogout();
+    } catch (err) {
+      console.error("Logout error:", err);
+    }
     setUser(null);
     setActiveProjectId(null);
+    // Clear localStorage user data
+    localStorage.removeItem(LS_KEYS.CURRENT_USER);
   };
 
   /* ----- project handlers ----- */
@@ -554,6 +673,18 @@ export default function App() {
     setActiveProjectId(id);
   };
 
+  // Refresh hardware when returning to dashboard
+  const refreshHardware = async () => {
+    if (user) {
+      try {
+        const hardware = await apiGetHardware();
+        setHW(hardware);
+      } catch (err) {
+        console.error("Failed to refresh hardware:", err);
+      }
+    }
+  };
+
   if (!user) {
     return <LoginView onLogin={handleLogin} onSignup={handleSignup} />;
   }
@@ -562,10 +693,16 @@ export default function App() {
     return (
       <ProjectView
         project={activeProject}
-        onBack={() => setActiveProjectId(null)}
+        onBack={() => {
+          setActiveProjectId(null);
+          refreshHardware(); // Refresh hardware when returning to dashboard
+        }}
         onLogout={handleLogout}
         user={user}
-        onHWChange={(next) => setHW(next)}
+        onHWChange={async () => {
+          // Refresh hardware from API after checkout/checkin
+          await refreshHardware();
+        }}
       />
     );
   }
