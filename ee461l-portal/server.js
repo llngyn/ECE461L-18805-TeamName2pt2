@@ -281,6 +281,22 @@ app.get("/api/portal-summary", requireAuth, (_req, res) => {
   res.json({ message: "Welcome to the EE461L Portal!" });
 });
 
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Serve static files from the Vite build output
+app.use(express.static(path.join(__dirname, "dist")));
+
+// For any other route that’s not an API route, serve index.html
+app.get("*", (req, res) => {
+  if (!req.path.startsWith("/api")) {
+    res.sendFile(path.join(__dirname, "dist", "index.html"));
+  }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`EE461L API running on http://localhost:${PORT}`);
