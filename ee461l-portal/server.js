@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import bcrypt from "bcrypt";
 import path from "path";
 import { fileURLToPath } from "url";
+import MongoStore from "connect-mongo";
 
 // --- Path Configuration (MUST be at the top) ---
 const __filename = fileURLToPath(import.meta.url);
@@ -53,12 +54,17 @@ app.use(
     cookie: {
       httpOnly: true,
       sameSite: "lax",
-      secure: process.env.NODE_ENV === "production", // TRUE in production
-      maxAge: 1000 * 60 * 60 * 8, // 8 hours
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 1000 * 60 * 60 * 8, 
     },
+    // --- Add this 'store' configuration ---
+    store: MongoStore.create({
+      mongoUrl: process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/ee461l_portal",
+      touchAfter: 24 * 3600 // Don't update session on every request
+    })
+    // --- End of new configuration ---
   })
 );
-
 // --- Models ---
 const userSchema = new mongoose.Schema(
   {
