@@ -127,11 +127,11 @@ mongoose
     console.error("Make sure MongoDB is running on localhost:27017");
   });
 
-// auth guard (optional example)
-//function requireAuth(req, _res, next) {
-  //if (req.session?.user) return next();
-  //return _res.status(401).json({ error: "Not authenticated" });
-//}
+//auth guard
+function requireAuth(req, _res, next) {
+  if (req.session?.user) return next();
+  return _res.status(401).json({ error: "Not authenticated" });
+}
 
 // --- API Routes ---
 app.get("/api/health", (_req, res) => res.json({ ok: true }));
